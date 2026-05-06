@@ -143,13 +143,14 @@ function KpiCard({ label, value, unit, Icon, accent, delay, active, isString }) 
 const MOCK_WX = { temperature: 28.4, windSpeed: 14.2, cloudCover: 35, humidity: 62 }
 
 function useWeather(city, active) {
-  const [wx,        setWx]   = useState(null)
-  const [loading,   setLoad] = useState(false)
-  const [usingMock, setMock] = useState(false)
+  const [wx,        setWx]       = useState(null)
+  const [location,  setLocation] = useState(null)
+  const [loading,   setLoad]     = useState(false)
+  const [usingMock, setMock]     = useState(false)
 
   useEffect(() => {
     if (!city || !active) return
-    setLoad(true); setMock(false); setWx(null)
+    setLoad(true); setMock(false); setWx(null); setLocation(null)
     const ctrl = new AbortController()
     ;(async () => {
       try {
@@ -157,6 +158,7 @@ function useWeather(city, active) {
         const geoData = await geoRes.json()
         if (!geoData.length) throw new Error('not found')
         const { lat, lon } = geoData[0]
+        setLocation({ lat: parseFloat(lat), lon: parseFloat(lon) })
         const wxRes  = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,wind_speed_10m,cloud_cover,relative_humidity_2m&forecast_days=1`, { signal: ctrl.signal })
         const wxData = await wxRes.json()
         setWx({ temperature: wxData.current.temperature_2m, windSpeed: wxData.current.wind_speed_10m, cloudCover: wxData.current.cloud_cover, humidity: wxData.current.relative_humidity_2m })
@@ -167,7 +169,7 @@ function useWeather(city, active) {
     return () => ctrl.abort()
   }, [city, active])
 
-  return { wx: wx || (!loading ? MOCK_WX : null), loading, usingMock }
+  return { wx: wx || (!loading ? MOCK_WX : null), location, loading, usingMock }
 }
 
 // ── Temperature KPI Card ──────────────────────────────────────────────────────
@@ -273,9 +275,57 @@ function WeatherCard({ city, wx, loading, usingMock }) {
   )
 }
 
+// ── Dynamic profile generators ────────────────────────────────────────────────
+function makeSolarP50(lat, cloudCover, temperature) {
+  const latFactor   = Math.cos((Math.abs(lat) * Math.PI) / 180) * 0.55 + 0.45
+  const cloudFactor = 1 - (cloudCover / 100) * 0.78
+  const tempFactor  = Math.max(0.3, 1 - Math.max(0, temperature - 25) * 0.004)
+  const peak        = 120 * latFactor * cloudFactor * tempFactor
+  return Array.from({ length: 24 }, (_, i) => {
+    if (i < 5 || i > 20) return 0
+    const x = (i - 12.5) / 3.8
+    return Math.max(0, +(peak * Math.exp(-x * x)).toFixed(1))
+  })
+}
+
+function makeWindP50(windSpeed) {
+  const scale = Math.max(0.25, Math.min(2.5, windSpeed / 14.2))
+  return windP50.map(v => +(v * scale).toFixed(1))
+}
+
+function getDynamicShap(mode, wx) {
+  if (!wx) return shapData
+  if (mode === 'solar') {
+    const cloudImpact = +(-Math.min(0.45, (wx.cloudCover / 100) * 0.5 + 0.05)).toFixed(2)
+    const tempImpact  = +(wx.temperature > 30 ? -0.09 : wx.temperature < 10 ? 0.06 : 0.15).toFixed(2)
+    const solarIrr    = +Math.max(0.05, 0.38 * (1 - wx.cloudCover / 150)).toFixed(2)
+    return [
+      { feature: 'Solar Irradiation', value: solarIrr },
+      { feature: 'Hour of Day',       value: 0.31 },
+      { feature: 'Lag 24h',           value: 0.21 },
+      { feature: 'Lag 1h',            value: 0.17 },
+      { feature: 'Temperature',       value: tempImpact },
+      { feature: 'Cloud Cover',       value: cloudImpact },
+      { feature: 'Wind Speed',        value: -0.12 },
+      { feature: 'Humidity',          value: +(-wx.humidity / 900).toFixed(2) },
+    ]
+  }
+  const wScale = Math.min(2, wx.windSpeed / 14.2)
+  return [
+    { feature: 'Wind Speed',  value: +(0.52 * wScale).toFixed(2) },
+    { feature: 'Hour of Day', value: 0.27 },
+    { feature: 'Lag 24h',     value: 0.19 },
+    { feature: 'Lag 1h',      value: 0.14 },
+    { feature: 'Temperature', value: -0.09 },
+    { feature: 'Cloud Cover', value: +Math.min(0.15, wx.cloudCover / 400).toFixed(2) },
+    { feature: 'Humidity',    value: -0.07 },
+    { feature: 'Pressure',    value: 0.11 },
+  ]
+}
+
 // ── SHAP Panel ────────────────────────────────────────────────────────────────
-function ShapPanel({ active }) {
-  const maxAbs = Math.max(...shapData.map(d => Math.abs(d.value)))
+function ShapPanel({ active, items }) {
+  const maxAbs = Math.max(...items.map(d => Math.abs(d.value)))
 
   return (
     <div
@@ -293,7 +343,7 @@ function ShapPanel({ active }) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {shapData.map((d) => {
+        {items.map((d) => {
           const pct   = Math.abs(d.value) / maxAbs * 100
           const isPos = d.value >= 0
           const color = isPos ? '#F5A623' : '#00D4FF'
@@ -633,8 +683,9 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
   const [chartData, setChartData] = useState([])
 
   // single weather fetch shared by TempCard + WeatherCard
-  const { wx, loading: wxLoading, usingMock } = useWeather(city, active)
+  const { wx, location, loading: wxLoading, usingMock } = useWeather(city, active)
 
+  // Initial load with fallback profiles
   useEffect(() => {
     setActive(false)
     const seed = city.charCodeAt(0) || 42
@@ -648,12 +699,35 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
     return () => clearTimeout(t)
   }, [mode, city])
 
+  // Update chart with location-aware data once weather loads
+  useEffect(() => {
+    if (!wx || !active) return
+    let p50, p10, p90
+    if (mode === 'solar' && location) {
+      p50 = makeSolarP50(location.lat, wx.cloudCover, wx.temperature)
+      p10 = p50.map(v => +(v * 0.72).toFixed(1))
+      p90 = p50.map(v => +(v * 1.28).toFixed(1))
+    } else if (mode === 'wind') {
+      p50 = makeWindP50(wx.windSpeed)
+      p10 = p50.map(v => +(v * 0.78).toFixed(1))
+      p90 = p50.map(v => +(v * 1.22).toFixed(1))
+    } else return
+    const seed = location ? Math.abs(Math.round((location.lat * 100 + location.lon) % 97)) : city.charCodeAt(0)
+    setChartData(buildChartData(p50, p10, p90, seed))
+  }, [wx, location, mode, active, city])
+
   document.title = `SolarWind IQ — ${city}`
 
-  const accent   = mode === 'solar' ? '#F5A623' : '#00D4FF'
-  const totalKwh = mode === 'solar' ? 487 : 843
-  const peakTime = mode === 'solar' ? '1:00 PM' : '4:00 PM'
-  const co2      = mode === 'solar' ? 342 : 591
+  const accent    = mode === 'solar' ? '#F5A623' : '#00D4FF'
+  const p50vals   = chartData.map(d => d.p50)
+  const rawTotal  = p50vals.reduce((a, v) => a + v, 0)
+  const totalKwh  = rawTotal > 0 ? Math.round(rawTotal) : (mode === 'solar' ? 487 : 843)
+  const peakIdx   = p50vals.length ? p50vals.indexOf(Math.max(...p50vals)) : -1
+  const peakTime  = peakIdx >= 0 && (p50vals[peakIdx] || 0) > 0
+    ? `${peakIdx % 12 || 12}:00 ${peakIdx >= 12 ? 'PM' : 'AM'}`
+    : (mode === 'solar' ? '1:00 PM' : '4:00 PM')
+  const co2       = Math.round(totalKwh * 0.71)
+  const shapItems = getDynamicShap(mode, wx)
 
   return (
     <div style={{ background: '#050810', minHeight: '100vh', paddingTop: 60 }}>
@@ -677,7 +751,7 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
 
         {/* S3 — SHAP + Weather */}
         <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 20, marginBottom: 20 }}>
-          <ShapPanel active={active} />
+          <ShapPanel active={active} items={shapItems} />
           <WeatherCard city={city} wx={wx} loading={wxLoading} usingMock={usingMock} />
         </div>
         <Divider mode={mode} />
