@@ -597,7 +597,7 @@ function Sidebar({ mode }) {
 }
 
 // ── Hero ──────────────────────────────────────────────────────────────────────
-function HeroScreen({ onSearch }) {
+function HeroScreen({ onSearch, histValues, histFileName, onHistData, onHistClear }) {
   const [query, setQuery] = useState('')
   const particles = Array.from({ length: 12 })
 
@@ -666,10 +666,23 @@ function HeroScreen({ onSearch }) {
           </div>
         </form>
 
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 40 }}>
           {[['94.2%','Forecast Accuracy'],['150+','Geographies'],['Hourly','Resolution']].map(([v, l]) => (
             <div key={l} className="stat-pill"><span>{v}</span> {l}</div>
           ))}
+        </div>
+
+        <div style={{ width: '100%', textAlign: 'left' }}>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10, textAlign: 'center' }}>
+            Have historical generation data? Upload it to calibrate the forecast.
+          </div>
+          <UploadCard
+            mode="solar"
+            fileName={histFileName}
+            rowCount={histValues.length}
+            onDataLoaded={onHistData}
+            onClear={onHistClear}
+          />
         </div>
       </div>
 
@@ -779,11 +792,9 @@ function UploadCard({ onDataLoaded, onClear, fileName, rowCount, mode }) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
-function Dashboard({ city, mode, onModeChange, onGoHome }) {
-  const [active,       setActive]      = useState(false)
+function Dashboard({ city, mode, onModeChange, onGoHome, histValues }) {
+  const [active,        setActive]       = useState(false)
   const [baseChartData, setBaseChartData] = useState([])
-  const [histValues,   setHistValues]  = useState([])
-  const [histFileName, setHistFileName] = useState(null)
 
   // single weather fetch shared by TempCard + WeatherCard
   const { wx, location, loading: wxLoading, usingMock } = useWeather(city, active)
@@ -853,15 +864,6 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
       <Sidebar mode={mode} />
 
       <main style={{ marginLeft: 64, padding: '32px 32px 48px' }}>
-        {/* Upload */}
-        <UploadCard
-          mode={mode}
-          fileName={histFileName}
-          rowCount={histValues.length}
-          onDataLoaded={(vals, name) => { setHistValues(vals); setHistFileName(name) }}
-          onClear={() => { setHistValues([]); setHistFileName(null) }}
-        />
-
         {/* S1 — Forecast Chart */}
         <ForecastChart data={chartData} mode={mode} active={active} hasHistory={histValues.length > 0} />
         <Divider mode={mode} />
@@ -898,9 +900,11 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [city,    setCity]    = useState(null)
-  const [mode,    setMode]    = useState('solar')
-  const [visible, setVisible] = useState(false)
+  const [city,         setCity]        = useState(null)
+  const [mode,         setMode]        = useState('solar')
+  const [visible,      setVisible]     = useState(false)
+  const [histValues,   setHistValues]  = useState([])
+  const [histFileName, setHistFileName] = useState(null)
 
   const handleSearch = useCallback((q) => {
     setVisible(false)
@@ -912,11 +916,19 @@ export default function App() {
     setTimeout(() => { setCity(null) }, 300)
   }, [])
 
-  if (!city) return <HeroScreen onSearch={handleSearch} />
+  if (!city) return (
+    <HeroScreen
+      onSearch={handleSearch}
+      histValues={histValues}
+      histFileName={histFileName}
+      onHistData={(vals, name) => { setHistValues(vals); setHistFileName(name) }}
+      onHistClear={() => { setHistValues([]); setHistFileName(null) }}
+    />
+  )
 
   return (
     <div style={{ opacity: visible ? 1 : 0, transform: visible ? 'translateY(0)' : 'translateY(20px)', transition: 'opacity 0.5s ease, transform 0.5s ease' }}>
-      <Dashboard city={city} mode={mode} onModeChange={setMode} onGoHome={handleGoHome} />
+      <Dashboard city={city} mode={mode} onModeChange={setMode} onGoHome={handleGoHome} histValues={histValues} />
     </div>
   )
 }
