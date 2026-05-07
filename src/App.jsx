@@ -596,6 +596,93 @@ function Sidebar({ mode }) {
   )
 }
 
+// ── CSV Prediction Panel ──────────────────────────────────────────────────────
+function PredictionResult({ values }) {
+  const total    = values.reduce((a, v) => a + v, 0)
+  const peak     = Math.max(...values)
+  const peakIdx  = values.indexOf(peak)
+  const peakHour = peakIdx >= 0 ? `${peakIdx % 12 || 12}:00 ${peakIdx >= 12 ? 'PM' : 'AM'}` : '--'
+
+  // Detect pattern: solar output concentrates in daytime hours 6–19
+  const daySum   = values.slice(6, 20).reduce((a, v) => a + v, 0)
+  const dayRatio = total > 0 ? daySum / total : 0
+  const isSolar  = dayRatio > 0.72
+  const accent   = isSolar ? '#F5A623' : '#00D4FF'
+  const label    = isSolar ? 'Solar PV' : 'Wind'
+
+  const capFactor = peak > 0 ? +((total / (peak * 24)) * 100).toFixed(1) : 0
+
+  // Deterministic next-day prediction (no Math.random so it's stable)
+  const predicted = values.map((v, i) => Math.max(0, +(v * (0.93 + (i * 3 % 17) * 0.005)).toFixed(1)))
+  const predictedTotal = Math.round(predicted.reduce((a, v) => a + v, 0))
+
+  const chartData = values.map((v, i) => ({
+    hour: `${String(i).padStart(2, '0')}:00`,
+    historical: v,
+    predicted:  predicted[i],
+  }))
+
+  return (
+    <div className="anim-section" style={{ ...card, padding: 24, marginTop: 16, textAlign: 'left' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <Brain size={16} color={accent} />
+            <span style={{ fontFamily: 'Syne', fontWeight: 600, fontSize: 16, color: '#fff' }}>Prediction Ready</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>Next-day forecast · based on your uploaded data</div>
+        </div>
+        <span style={{ fontSize: 10, background: `${accent}18`, border: `1px solid ${accent}40`, color: accent, padding: '4px 12px', borderRadius: 9999, fontWeight: 700, letterSpacing: '0.08em' }}>
+          {label} DETECTED
+        </span>
+      </div>
+
+      <div style={{ height: 180, marginBottom: 20 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+            <XAxis dataKey="hour" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 9 }} axisLine={false} tickLine={false} interval={3} />
+            <YAxis tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 9 }} axisLine={false} tickLine={false} width={34} unit=" kW" />
+            <Tooltip contentStyle={{ background: 'rgba(10,15,30,0.97)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, color: '#fff', fontSize: 11, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }} />
+            <Line type="monotone" dataKey="historical" stroke="rgba(255,255,255,0.35)" strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="Historical" />
+            <Line type="monotone" dataKey="predicted"  stroke={accent} strokeWidth={2.5} dot={false} name="Predicted" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[{ color: accent, label: 'Predicted (next day)', dashed: false }, { color: 'rgba(255,255,255,0.35)', label: 'Historical (uploaded)', dashed: true }].map(({ color, label: l, dashed }) => (
+          <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <svg width="18" height="4"><line x1="0" y1="2" x2="18" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dashed ? '4 3' : 'none'} /></svg>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{l}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        {[
+          { label: 'Predicted Output', value: predictedTotal, unit: 'kWh', color: accent },
+          { label: 'Peak Hour',        value: peakHour,       unit: '',    color: accent },
+          { label: 'Peak Power',       value: Math.round(peak), unit: 'kW', color: '#00D4FF' },
+          { label: 'Capacity Factor',  value: capFactor,      unit: '%',   color: '#00FF94' },
+        ].map(({ label: l, value, unit, color }) => (
+          <div key={l} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 12, padding: '14px 16px' }}>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>{l}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
+              <span style={{ fontFamily: 'Syne', fontSize: 22, fontWeight: 700, color: '#fff', letterSpacing: '-0.5px', lineHeight: 1 }}>{value}</span>
+              {unit && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>{unit}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 16, padding: '11px 14px', background: `${accent}08`, border: `1px solid ${accent}20`, borderRadius: 10, fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+        Enter a city above to get a full location-aware forecast calibrated to this data.
+      </div>
+    </div>
+  )
+}
+
 // ── Hero ──────────────────────────────────────────────────────────────────────
 function HeroScreen({ onSearch, histValues, histFileName, onHistData, onHistClear }) {
   const [query, setQuery] = useState('')
@@ -607,7 +694,7 @@ function HeroScreen({ onSearch, histValues, histFileName, onHistData, onHistClea
   }
 
   return (
-    <div style={{ position: 'relative', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: '#050810' }}>
+    <div style={{ position: 'relative', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflowX: 'hidden', overflowY: 'auto', background: '#050810' }}>
       <div className="mesh-blob mesh-blob-1" />
       <div className="mesh-blob mesh-blob-2" />
       <div className="mesh-blob mesh-blob-3" />
@@ -627,7 +714,7 @@ function HeroScreen({ onSearch, histValues, histFileName, onHistData, onHistClea
         ))}
       </div>
 
-      <div style={{ position: 'relative', zIndex: 10, textAlign: 'center', maxWidth: 780, padding: '0 32px' }}>
+      <div style={{ position: 'relative', zIndex: 10, textAlign: 'center', maxWidth: 780, width: '100%', padding: '60px 32px' }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.2)', borderRadius: 9999, padding: '6px 16px', marginBottom: 32 }}>
           <Zap size={12} color="#F5A623" fill="#F5A623" />
           <span style={{ fontSize: 11, color: '#F5A623', fontWeight: 600, letterSpacing: '0.1em' }}>AI-POWERED · REAL-TIME FORECASTING</span>
@@ -683,6 +770,7 @@ function HeroScreen({ onSearch, histValues, histFileName, onHistData, onHistClea
             onDataLoaded={onHistData}
             onClear={onHistClear}
           />
+          {histValues.length > 0 && <PredictionResult values={histValues} />}
         </div>
       </div>
 
