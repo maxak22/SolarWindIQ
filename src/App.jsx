@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ComposedChart, Area, Line, LineChart,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -107,6 +107,12 @@ function ForecastTooltip({ active, payload, label, mode }) {
         <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>Actual</span>
         <span style={{ color: 'rgba(255,255,255,0.9)', fontFamily: 'Syne', fontWeight: 600, fontSize: 13 }}>{map.actual ?? '--'} kW</span>
       </div>
+      {map.historical != null && (
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', gap: 24 }}>
+          <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>Historical</span>
+          <span style={{ color: '#00FF94', fontFamily: 'Syne', fontWeight: 600, fontSize: 13 }}>{map.historical} kW</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -449,7 +455,7 @@ function BenchmarkPanel({ active }) {
 }
 
 // ── Forecast Chart ────────────────────────────────────────────────────────────
-function ForecastChart({ data, mode, active }) {
+function ForecastChart({ data, mode, active, hasHistory }) {
   const accent = mode === 'solar' ? '#F5A623' : '#00D4FF'
 
   return (
@@ -500,6 +506,8 @@ function ForecastChart({ data, mode, active }) {
             <Line type="monotone" dataKey="p50" stroke={accent} strokeWidth={2.5} dot={false} />
             {/* Actual dashed */}
             <Line type="monotone" dataKey="actual" stroke="rgba(255,255,255,0.55)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+            {/* Historical uploaded data */}
+            {hasHistory && <Line type="monotone" dataKey="historical" stroke="#00FF94" strokeWidth={2} dot={{ r: 3, fill: '#00FF94', strokeWidth: 0 }} connectNulls={false} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -509,6 +517,7 @@ function ForecastChart({ data, mode, active }) {
           { color: accent, label: 'P50 Median', dashed: false },
           { color: `${accent}50`, label: 'P10–P90 Confidence', dashed: false },
           { color: 'rgba(255,255,255,0.55)', label: 'Actual', dashed: true },
+          ...(hasHistory ? [{ color: '#00FF94', label: 'Historical', dashed: false }] : []),
         ].map(({ color, label, dashed }) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <svg width="20" height="4"><line x1="0" y1="2" x2="20" y2="2" stroke={color} strokeWidth="2" strokeDasharray={dashed ? '5 3' : 'none'} /></svg>
@@ -677,10 +686,104 @@ function Divider({ mode }) {
   )
 }
 
+// ── Upload Card ───────────────────────────────────────────────────────────────
+function UploadCard({ onDataLoaded, onClear, fileName, rowCount, mode }) {
+  const [dragging, setDragging] = useState(false)
+  const fileRef   = useRef(null)
+  const accent    = mode === 'solar' ? '#F5A623' : '#00D4FF'
+
+  const parseCSV = (text) => {
+    const values = []
+    for (const line of text.trim().split(/\r?\n/)) {
+      const cols = line.split(',')
+      for (let i = cols.length - 1; i >= 0; i--) {
+        const n = parseFloat(cols[i].replace(/[^0-9.-]/g, ''))
+        if (!isNaN(n) && n >= 0) { values.push(n); break }
+      }
+    }
+    return values.slice(0, 24)
+  }
+
+  const handleFile = (file) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const vals = parseCSV(e.target.result)
+      if (vals.length > 0) onDataLoaded(vals, file.name)
+    }
+    reader.readAsText(file)
+  }
+
+  return (
+    <div
+      className="anim-section"
+      style={{
+        ...card,
+        padding: '20px 24px',
+        marginBottom: 20,
+        borderColor: dragging ? accent : fileName ? `${accent}40` : 'rgba(255,255,255,0.08)',
+        background: dragging ? `${accent}08` : 'rgba(255,255,255,0.03)',
+        cursor: fileName ? 'default' : 'pointer',
+        transition: 'border-color 0.2s, background 0.2s',
+      }}
+      onDragOver={e => { e.preventDefault(); setDragging(true) }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]) }}
+      onClick={() => !fileName && fileRef.current?.click()}
+    >
+      <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }}
+        onChange={e => { handleFile(e.target.files[0]); e.target.value = '' }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: `${accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontFamily: 'Syne', fontWeight: 600, fontSize: 14, color: '#fff', marginBottom: 2 }}>
+              {fileName || 'Upload Historical Generation Data'}
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
+              {fileName
+                ? `${rowCount} hourly readings · forecast auto-calibrated`
+                : 'Drag & drop a CSV or click to browse · calibrates the forecast to your site'}
+            </div>
+          </div>
+        </div>
+
+        {fileName ? (
+          <button
+            onClick={e => { e.stopPropagation(); onClear() }}
+            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '6px 14px', color: 'rgba(255,255,255,0.5)', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#fff'}
+            onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.5)'}
+          >
+            Clear
+          </button>
+        ) : (
+          <span style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: 'rgba(255,255,255,0.3)' }}>CSV</span>
+        )}
+      </div>
+
+      {fileName && (
+        <div style={{ marginTop: 14, height: 3, background: 'rgba(255,255,255,0.05)', borderRadius: 9999, overflow: 'hidden' }}>
+          <div style={{ width: '100%', height: '100%', background: `linear-gradient(90deg, ${accent}, ${accent}60)`, borderRadius: 9999 }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function Dashboard({ city, mode, onModeChange, onGoHome }) {
-  const [active, setActive] = useState(false)
-  const [chartData, setChartData] = useState([])
+  const [active,       setActive]      = useState(false)
+  const [baseChartData, setBaseChartData] = useState([])
+  const [histValues,   setHistValues]  = useState([])
+  const [histFileName, setHistFileName] = useState(null)
 
   // single weather fetch shared by TempCard + WeatherCard
   const { wx, location, loading: wxLoading, usingMock } = useWeather(city, active)
@@ -693,7 +796,7 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
       ? [solarP50, solarP10, solarP90]
       : [windP50, windP10, windP90]
     const t = setTimeout(() => {
-      setChartData(buildChartData(p50, p10, p90, seed))
+      setBaseChartData(buildChartData(p50, p10, p90, seed))
       setActive(true)
     }, 150)
     return () => clearTimeout(t)
@@ -713,8 +816,23 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
       p90 = p50.map(v => +(v * 1.22).toFixed(1))
     } else return
     const seed = location ? Math.abs(Math.round((location.lat * 100 + location.lon) % 97)) : city.charCodeAt(0)
-    setChartData(buildChartData(p50, p10, p90, seed))
+    setBaseChartData(buildChartData(p50, p10, p90, seed))
   }, [wx, location, mode, active, city])
+
+  // Merge historical data + calibrate forecast
+  const chartData = (() => {
+    if (!baseChartData.length || !histValues.length) return baseChartData
+    const histAvg  = histValues.reduce((a, v) => a + v, 0) / histValues.length
+    const modelAvg = baseChartData.reduce((a, d) => a + d.p50, 0) / baseChartData.length
+    const scale    = modelAvg > 0 ? Math.min(3, Math.max(0.1, histAvg / modelAvg)) : 1
+    return baseChartData.map((d, i) => ({
+      ...d,
+      p50: +(d.p50 * scale).toFixed(1),
+      p10: +(d.p10 * scale).toFixed(1),
+      p90: +(d.p90 * scale).toFixed(1),
+      historical: i < histValues.length ? histValues[i] : null,
+    }))
+  })()
 
   document.title = `SolarWind IQ — ${city}`
 
@@ -735,8 +853,17 @@ function Dashboard({ city, mode, onModeChange, onGoHome }) {
       <Sidebar mode={mode} />
 
       <main style={{ marginLeft: 64, padding: '32px 32px 48px' }}>
+        {/* Upload */}
+        <UploadCard
+          mode={mode}
+          fileName={histFileName}
+          rowCount={histValues.length}
+          onDataLoaded={(vals, name) => { setHistValues(vals); setHistFileName(name) }}
+          onClear={() => { setHistValues([]); setHistFileName(null) }}
+        />
+
         {/* S1 — Forecast Chart */}
-        <ForecastChart data={chartData} mode={mode} active={active} />
+        <ForecastChart data={chartData} mode={mode} active={active} hasHistory={histValues.length > 0} />
         <Divider mode={mode} />
 
         {/* S2 — KPI Row (5 cards: 4 existing + live temp) */}
